@@ -1,0 +1,233 @@
+//! Interactive Claude sessions running inside a PTY.
+//!
+//! The "super lightning" button launches `claude` (interactive) in the working
+//! directory of the clicked agent and streams the PTY to an embedded xterm.js
+//! terminal in the frontend. Because it is a real PTY, Ctrl+C, Esc and Claude's
+//! interactive menus all work.
+
+use crate::error::AppError;
+use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
+use std::collections::HashMap;
+use std::io::{Read, Write};
+use std::sync::{LazyLock, Mutex};
+use tauri::{AppHandle, Emitter};
+
+struct Session {
+    master: Box<dyn MasterPty + Send>,
+    writer: Box<dyn Write + Send>,
+    child: Box<dyn portable_pty::Child + Send + Sync>,
+}
+
+static SESSIONS: LazyLock<Mutex<HashMap<String, Session>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+#[derive(Clone, serde::Serialize)]
+struct OutputPayload {
+    id: String,
+    bytes: Vec<u8>,
+}
+
+#[derive(Clone, serde::Serialize)]
+struct ExitPayload {
+    id: String,
+}
+
+/// Resolve the `claude` binary, preferring known Homebrew/local locations.
+fn resolve_claude() -> String {
+    for candidate in ["/opt/homebrew/bin/claude", "/usr/local/bin/claude"] {
+        if std::path::Path::new(candidate).exists() {
+            return candidate.to_string();
+        }
+    }
+    "claude".to_string()
+}
+
+/// Extract the target of a `cd "<path>"` / `cd '<path>'` from a shell command string.
+fn extract_cd_dir(s: &str) -> Option<String> {
+    let (start, quote) = s
+        .find("cd \"")
+        .map(|i| (i + 4, '"'))
+        .or_else(|| s.find("cd '").map(|i| (i + 4, '\'')))?;
+    let rest = &s[start..];
+    let end = rest.find(quote)?;
+    Some(rest[..end].to_string())
+}
+
+/// Best-effort working directory for an agent: its `WorkingDirectory`, else a
+/// `cd` inside its command, else the directory of the script it runs, else $HOME.
+fn derive_cwd(plist_path: &str) -> String {
+    let home = dirs::home_dir().unwrap_or_default();
+    let home_str = home.to_string_lossy().to_string();
+
+    if let Ok(cfg) = crate::plist_util::parse_plist(plist_path) {
+        if let Some(wd) = cfg.working_directory {
+            if !wd.is_empty() && std::path::Path::new(&wd).is_dir() {
+                return wd;
+            }
+        }
+        let mut candidates: Vec<String> = Vec::new();
+        if let Some(p) = cfg.program {
+            candidates.push(p);
+        }
+        if let Some(args) = cfg.program_arguments {
+            candidates.extend(args);
+        }
+        for c in &candidates {
+            if let Some(dir) = extract_cd_dir(c) {
+                if std::path::Path::new(&dir).is_dir() {
+                    return dir;
+                }
+            }
+        }
+        for c in &candidates {
+            if c.starts_with(&home_str) && !c.contains(".app/") {
+                let p = std::path::Path::new(c);
+                if p.is_dir() {
+                    return c.clone();
+                }
+                if p.is_file() {
+                    if let Some(parent) = p.parent() {
+                        return parent.to_string_lossy().to_string();
+                    }
+                }
+            }
+        }
+    }
+    home_str
+}
+
+fn start(
+    app: AppHandle,
+    id: String,
+    cwd: String,
+    cols: u16,
+    rows: u16,
+    prompt: String,
+) -> Result<(), AppError> {
+    let pty_system = native_pty_system();
+    let pair = pty_system
+        .openpty(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .map_err(|e| AppError::Launchctl(format!("pty open: {e}")))?;
+
+    let mut cmd = CommandBuilder::new(resolve_claude());
+    if !prompt.is_empty() {
+        cmd.arg(prompt);
+    }
+    cmd.cwd(cwd);
+    // Inherit the parent environment, then ensure claude is findable and the
+    // terminal type is set for its TUI.
+    for (k, v) in std::env::vars() {
+        cmd.env(k, v);
+    }
+    let path = std::env::var("PATH").unwrap_or_default();
+    cmd.env("PATH", format!("/opt/homebrew/bin:/usr/local/bin:{path}"));
+    cmd.env("TERM", "xterm-256color");
+
+    let child = pair
+        .slave
+        .spawn_command(cmd)
+        .map_err(|e| AppError::Launchctl(format!("spawn claude: {e}")))?;
+    drop(pair.slave);
+
+    let mut reader = pair
+        .master
+        .try_clone_reader()
+        .map_err(|e| AppError::Launchctl(format!("pty reader: {e}")))?;
+    let writer = pair
+        .master
+        .take_writer()
+        .map_err(|e| AppError::Launchctl(format!("pty writer: {e}")))?;
+
+    SESSIONS.lock().unwrap().insert(
+        id.clone(),
+        Session {
+            master: pair.master,
+            writer,
+            child,
+        },
+    );
+
+    // Stream PTY output to the frontend until the process exits.
+    let reader_app = app.clone();
+    let reader_id = id.clone();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    let _ = reader_app.emit(
+                        "claude-terminal-output",
+                        OutputPayload {
+                            id: reader_id.clone(),
+                            bytes: buf[..n].to_vec(),
+                        },
+                    );
+                }
+            }
+        }
+        let _ = reader_app.emit(
+            "claude-terminal-exit",
+            ExitPayload {
+                id: reader_id.clone(),
+            },
+        );
+        SESSIONS.lock().unwrap().remove(&reader_id);
+    });
+
+    Ok(())
+}
+
+#[tauri::command]
+pub fn claude_terminal_start(
+    app: AppHandle,
+    id: String,
+    plist_path: String,
+    cols: u16,
+    rows: u16,
+    prompt: String,
+) -> Result<(), AppError> {
+    let cwd = derive_cwd(&plist_path);
+    start(app, id, cwd, cols, rows, prompt)
+}
+
+#[tauri::command]
+pub fn claude_terminal_write(id: String, data: String) -> Result<(), AppError> {
+    let mut map = SESSIONS.lock().unwrap();
+    if let Some(s) = map.get_mut(&id) {
+        s.writer
+            .write_all(data.as_bytes())
+            .map_err(|e| AppError::Launchctl(format!("pty write: {e}")))?;
+        let _ = s.writer.flush();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn claude_terminal_resize(id: String, cols: u16, rows: u16) -> Result<(), AppError> {
+    let map = SESSIONS.lock().unwrap();
+    if let Some(s) = map.get(&id) {
+        s.master
+            .resize(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|e| AppError::Launchctl(format!("pty resize: {e}")))?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn claude_terminal_stop(id: String) -> Result<(), AppError> {
+    if let Some(mut s) = SESSIONS.lock().unwrap().remove(&id) {
+        let _ = s.child.kill();
+    }
+    Ok(())
+}

@@ -51,3 +51,22 @@ export const getHomeDir = () => invoke<string>("get_home_dir")
 
 export const revealInFinder = (path: string) =>
   invoke<void>("reveal_in_finder", { path })
+
+// --- Claude launch terminal (interactive PTY) ---
+
+export const claudeTerminalStart = (
+  id: string,
+  plistPath: string,
+  cols: number,
+  rows: number,
+  prompt: string
+) => invoke<void>("claude_terminal_start", { id, plistPath, cols, rows, prompt })
+
+export const claudeTerminalWrite = (id: string, data: string) =>
+  invoke<void>("claude_terminal_write", { id, data })
+
+export const claudeTerminalResize = (id: string, cols: number, rows: number) =>
+  invoke<void>("claude_terminal_resize", { id, cols, rows })
+
+export const claudeTerminalStop = (id: string) =>
+  invoke<void>("claude_terminal_stop", { id })

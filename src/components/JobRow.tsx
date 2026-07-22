@@ -1,3 +1,4 @@
+import { useState } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -8,6 +9,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { TableCell, TableRow } from "@/components/ui/table"
+import { AgentTerminal } from "@/components/AgentTerminal"
 import type { JobListEntry } from "@/types"
 import {
   Play,
@@ -18,6 +20,8 @@ import {
   FileText,
   FolderOpen,
   Zap,
+  ChevronDown,
+  ChevronRight,
 } from "lucide-react"
 
 function formatRelativeTime(epochMillis: string): string {
@@ -98,8 +102,28 @@ export function JobRow({
   onRevealInFinder,
 }: JobRowProps) {
   const isUserAgent = job.source === "UserAgent"
+  const isHome = job.is_home_agent
+
+  // Interactive "launch observer" claude session for this agent.
+  const [claudeStarted, setClaudeStarted] = useState(false)
+  const [expanded, setExpanded] = useState(false)
+  const sessionId = `claude-terminal:${job.plist_path}`
+  const observerPrompt =
+    `Tu es lancé comme observateur du lancement de l'agent launchd « ${job.label} ». ` +
+    `Localise et lis ses logs récents et son script/plist, puis commente en direct, ` +
+    `de façon concise, comment se passe son lancement. Signale toute erreur ou anomalie.`
+
+  const launchClaude = () => {
+    setClaudeStarted(true)
+    setExpanded(true)
+  }
+  const stopClaude = () => {
+    setClaudeStarted(false)
+    setExpanded(false)
+  }
 
   return (
+    <>
     <TableRow
       className="cursor-pointer hover:bg-muted/50"
       onClick={() => onSelect(job)}
@@ -178,6 +202,29 @@ export function JobRow({
               <Zap className="h-4 w-4" />
             </Button>
           )}
+          {isHome && (
+            <>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8"
+                onClick={launchClaude}
+                title="Lancer un chat Claude d'observation du lancement"
+              >
+                <Zap className="h-4 w-4 fill-amber-400 text-amber-500" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8"
+                onClick={stopClaude}
+                disabled={!claudeStarted}
+                title="Arrêter le chat Claude"
+              >
+                <Square className="h-4 w-4 fill-red-500 text-red-500" />
+              </Button>
+            </>
+          )}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" size="icon" className="h-8 w-8">
@@ -211,8 +258,36 @@ export function JobRow({
               )}
             </DropdownMenuContent>
           </DropdownMenu>
+          {isHome && claudeStarted && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8"
+              onClick={() => setExpanded((v) => !v)}
+              title={expanded ? "Replier le terminal Claude" : "Déplier le terminal Claude"}
+            >
+              {expanded ? (
+                <ChevronDown className="h-4 w-4" />
+              ) : (
+                <ChevronRight className="h-4 w-4" />
+              )}
+            </Button>
+          )}
         </div>
       </TableCell>
     </TableRow>
+    {isHome && claudeStarted && (
+      <TableRow className={expanded ? "" : "hidden"}>
+        <TableCell colSpan={6} className="p-0">
+          <AgentTerminal
+            sessionId={sessionId}
+            plistPath={job.plist_path}
+            prompt={observerPrompt}
+            visible={expanded}
+          />
+        </TableCell>
+      </TableRow>
+    )}
+    </>
   )
 }

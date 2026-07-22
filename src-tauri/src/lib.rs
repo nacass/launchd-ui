@@ -2,6 +2,7 @@ mod commands;
 mod error;
 mod launchctl;
 mod plist_util;
+mod pty;
 mod types;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -25,6 +26,10 @@ pub fn run() {
             commands::open_log_in_editor,
             commands::get_home_dir,
             commands::reveal_in_finder,
+            pty::claude_terminal_start,
+            pty::claude_terminal_write,
+            pty::claude_terminal_resize,
+            pty::claude_terminal_stop,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
