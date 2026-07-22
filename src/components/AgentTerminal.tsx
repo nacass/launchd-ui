@@ -21,6 +21,11 @@ type AgentTerminalProps = {
   prompt: string
   /** Whether the panel is currently expanded (drives re-fit). */
   visible: boolean
+  /**
+   * Reports whether claude is "busy": actively working OR waiting on a yes/no
+   * approval. False once it has finished responding and sits idle at its prompt.
+   */
+  onBusyChange?: (busy: boolean) => void
 }
 
 // The interactive claude session lives for as long as this component is mounted:
@@ -31,10 +36,13 @@ export function AgentTerminal({
   plistPath,
   prompt,
   visible,
+  onBusyChange,
 }: AgentTerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
+  const onBusyRef = useRef(onBusyChange)
+  onBusyRef.current = onBusyChange
 
   useEffect(() => {
     const container = containerRef.current
@@ -83,6 +91,33 @@ export function AgentTerminal({
     const unlisteners: Array<() => void> = []
     let disposed = false
 
+    // Track claude's activity by reading the visible terminal: it shows
+    // "esc to interrupt" while working and "Do you want to proceed / esc to
+    // cancel" while waiting on a yes/no approval; neither means it is idle.
+    let lastBusy: boolean | null = null
+    const reportBusy = (busy: boolean) => {
+      if (busy !== lastBusy) {
+        lastBusy = busy
+        onBusyRef.current?.(busy)
+      }
+    }
+    const evalBusy = () => {
+      const buf = term.buffer.active
+      const startLine = Math.max(0, buf.length - 25)
+      let text = ""
+      for (let i = startLine; i < buf.length; i++) {
+        text += (buf.getLine(i)?.translateToString(true) ?? "") + "\n"
+      }
+      const t = text.toLowerCase()
+      reportBusy(
+        t.includes("esc to interrupt") ||
+          t.includes("do you want to proceed") ||
+          t.includes("esc to cancel")
+      )
+    }
+    reportBusy(true) // launching + processing the initial prompt
+    const busyInterval = setInterval(evalBusy, 700)
+
     // Subscribe to output BEFORE starting so nothing is missed.
     listen<OutputPayload>("claude-terminal-output", (e) => {
       if (e.payload.id === sessionId) {
@@ -93,6 +128,7 @@ export function AgentTerminal({
     listen<ExitPayload>("claude-terminal-exit", (e) => {
       if (e.payload.id === sessionId && !disposed) {
         term.write("\r\n\x1b[2m[claude session ended]\x1b[0m\r\n")
+        reportBusy(false)
       }
     }).then((un) => unlisteners.push(un))
 
@@ -120,6 +156,8 @@ export function AgentTerminal({
 
     return () => {
       disposed = true
+      clearInterval(busyInterval)
+      reportBusy(false)
       ro.disconnect()
       dataSub.dispose()
       unlisteners.forEach((un) => un())

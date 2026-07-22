@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { TableCell, TableRow } from "@/components/ui/table"
 import { AgentTerminal } from "@/components/AgentTerminal"
+import { claudeTerminalWrite } from "@/lib/invoke"
 import type { JobListEntry } from "@/types"
 import {
   Play,
@@ -104,23 +105,33 @@ export function JobRow({
   const isUserAgent = job.source === "UserAgent"
   const isHome = job.is_home_agent
 
-  // Interactive "launch observer" claude session for this agent.
+  // Interactive claude session for this agent.
   const [claudeStarted, setClaudeStarted] = useState(false)
+  // "Busy" = claude is working or waiting on a yes/no; false once it is idle.
+  const [claudeBusy, setClaudeBusy] = useState(false)
   const [expanded, setExpanded] = useState(false)
   const sessionId = `claude-terminal:${job.plist_path}`
-  const observerPrompt =
-    `Tu es lancé comme observateur du lancement de l'agent launchd « ${job.label} ». ` +
-    `Localise et lis ses logs récents et son script/plist, puis commente en direct, ` +
-    `de façon concise, comment se passe son lancement. Signale toute erreur ou anomalie.`
+  const claudePrompt = "où en est-on ?"
 
-  const launchClaude = () => {
-    setClaudeStarted(true)
+  // Super-lightning: launch claude, or (when idle) ask again in the same
+  // session. Disabled while claude is busy.
+  const onSuperLightning = () => {
+    if (!claudeStarted) {
+      setClaudeStarted(true)
+    } else {
+      claudeTerminalWrite(sessionId, `${claudePrompt}\r`)
+      setClaudeBusy(true)
+    }
     setExpanded(true)
   }
-  const stopClaude = () => {
-    setClaudeStarted(false)
-    setExpanded(false)
+  // Super-stop: interrupt claude's current turn (Esc). The session and its
+  // conversation stay, so the chevron keeps showing the transcript.
+  const onSuperStop = () => {
+    claudeTerminalWrite(sessionId, "\x1b")
   }
+  // Active = a session exists AND claude is busy (working or awaiting yes/no).
+  const claudeActive = claudeStarted && claudeBusy
+  const greyIcon = "fill-muted-foreground/20 text-muted-foreground/40"
 
   return (
     <>
@@ -208,20 +219,31 @@ export function JobRow({
                 variant="ghost"
                 size="icon"
                 className="h-8 w-8"
-                onClick={launchClaude}
-                title="Lancer un chat Claude d'observation du lancement"
+                onClick={onSuperLightning}
+                disabled={claudeActive}
+                title={
+                  !claudeStarted
+                    ? "Lancer un chat Claude (« où en est-on ? »)"
+                    : claudeBusy
+                      ? "Claude travaille…"
+                      : "Redemander « où en est-on ? »"
+                }
               >
-                <Zap className="h-4 w-4 fill-amber-400 text-amber-500" />
+                <Zap
+                  className={`h-4 w-4 ${claudeActive ? greyIcon : "fill-amber-400 text-amber-500"}`}
+                />
               </Button>
               <Button
                 variant="ghost"
                 size="icon"
                 className="h-8 w-8"
-                onClick={stopClaude}
-                disabled={!claudeStarted}
-                title="Arrêter le chat Claude"
+                onClick={onSuperStop}
+                disabled={!claudeActive}
+                title="Interrompre Claude (Échap)"
               >
-                <Square className="h-4 w-4 fill-red-500 text-red-500" />
+                <Square
+                  className={`h-4 w-4 ${claudeActive ? "fill-red-500 text-red-500" : greyIcon}`}
+                />
               </Button>
             </>
           )}
@@ -282,8 +304,9 @@ export function JobRow({
           <AgentTerminal
             sessionId={sessionId}
             plistPath={job.plist_path}
-            prompt={observerPrompt}
+            prompt={claudePrompt}
             visible={expanded}
+            onBusyChange={setClaudeBusy}
           />
         </TableCell>
       </TableRow>
