@@ -41,12 +41,37 @@ export function AgentTerminal({
     if (!container) return
 
     const term = new Terminal({
-      fontSize: 12,
+      fontSize: 13,
       fontFamily:
-        'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
-      cursorBlink: true,
+        '"SF Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+      cursorBlink: false,
+      cursorStyle: "bar",
       scrollback: 5000,
-      theme: { background: "#0a0a0a", foreground: "#e4e4e7" },
+      // Matches the user's Ghostty theme (~/.config/ghostty/config).
+      theme: {
+        background: "#f5f0e8",
+        foreground: "#1a1a1a",
+        cursor: "#8b5cf6",
+        cursorAccent: "#f5f0e8",
+        selectionBackground: "#e9d8fd",
+        selectionForeground: "#1a1a1a",
+        black: "#2d2d2d",
+        red: "#c0392b",
+        green: "#27ae60",
+        yellow: "#d68910",
+        blue: "#8b5cf6",
+        magenta: "#9b59b6",
+        cyan: "#16a085",
+        white: "#e8e0d0",
+        brightBlack: "#6b6b6b",
+        brightRed: "#e74c3c",
+        brightGreen: "#2ecc71",
+        brightYellow: "#f39c12",
+        brightBlue: "#a78bfa",
+        brightMagenta: "#b77edb",
+        brightCyan: "#1abc9c",
+        brightWhite: "#f5f0e8",
+      },
     })
     const fit = new FitAddon()
     term.loadAddon(fit)
