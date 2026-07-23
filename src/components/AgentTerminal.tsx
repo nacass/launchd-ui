@@ -104,7 +104,9 @@ export function AgentTerminal({
     type Status = "working" | "waiting" | "idle"
     let lastStatus: Status | null = null
     const reportStatus = (status: Status, approveKey: string | null) => {
-      if (status !== lastStatus) {
+      // Fire on any status change, and keep firing while waiting so the approve
+      // key stays fresh as the (possibly late-rendering) menu options appear.
+      if (status !== lastStatus || status === "waiting") {
         lastStatus = status
         onStatusRef.current?.(status, approveKey)
       }
@@ -120,12 +122,15 @@ export function AgentTerminal({
       if (t.includes("esc to interrupt")) {
         reportStatus("working", null)
       } else if (
-        t.includes("do you want to proceed") ||
+        t.includes("do you want to") ||
         t.includes("esc to cancel") ||
         t.includes("no, exit")
       ) {
-        // "yes, and don't ask again" is option 2 when present, else plain yes = 1.
-        const approveKey = t.includes("don't ask again") ? "2" : "1"
+        // 3-option prompt ("1. Yes / 2. Yes-for-all / 3. No") → approve with "2"
+        // (works for edits "allow all edits…" and commands "don't ask again…");
+        // a 2-option prompt ("1. Yes / 2. No") → "1".
+        const hasThirdOption = /(?:^|\s)3\.\s/m.test(text)
+        const approveKey = hasThirdOption ? "2" : "1"
         reportStatus("waiting", approveKey)
       } else {
         reportStatus("idle", null)
