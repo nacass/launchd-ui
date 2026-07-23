@@ -97,25 +97,38 @@ fn derive_cwd(plist_path: &str) -> String {
     home_str
 }
 
-/// True when claude already has a saved conversation for `cwd`, so it can be
-/// resumed with `--continue` instead of starting fresh. Claude stores per-project
-/// transcripts under ~/.claude/projects/<slug>/ where <slug> is the cwd with every
-/// non-alphanumeric character replaced by '-'.
-fn has_prior_conversation(cwd: &str) -> bool {
-    let Some(home) = dirs::home_dir() else {
-        return false;
-    };
+/// Session id (UUID) of the last saved conversation for `cwd`, or None. Claude
+/// stores per-project transcripts under ~/.claude/projects/<slug>/<uuid>.jsonl
+/// where <slug> is the cwd with every non-alphanumeric character replaced by '-'.
+/// Prefers a "substantial" transcript (real conversation) over tiny one-shot `-p`
+/// calls, then the most recent.
+fn last_conversation_id(cwd: &str) -> Option<String> {
+    let home = dirs::home_dir()?;
     let slug: String = cwd
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
         .collect();
     let dir = home.join(".claude/projects").join(slug);
-    match std::fs::read_dir(&dir) {
-        Ok(entries) => entries
-            .flatten()
-            .any(|e| e.path().extension().is_some_and(|x| x == "jsonl")),
-        Err(_) => false,
+
+    let mut best: Option<(bool, std::time::SystemTime, String)> = None;
+    for entry in std::fs::read_dir(&dir).ok()?.flatten() {
+        let path = entry.path();
+        if path.extension().is_some_and(|x| x == "jsonl") {
+            let Some(id) = path.file_stem().and_then(|s| s.to_str()).map(String::from) else {
+                continue;
+            };
+            let Ok(meta) = entry.metadata() else { continue };
+            let Ok(mtime) = meta.modified() else { continue };
+            let substantial = meta.len() > 3000;
+            let better = best
+                .as_ref()
+                .is_none_or(|(bs, bt, _)| (substantial, mtime) > (*bs, *bt));
+            if better {
+                best = Some((substantial, mtime, id));
+            }
+        }
     }
+    best.map(|(_, _, id)| id)
 }
 
 fn start(
@@ -141,10 +154,9 @@ fn start(
     // nothing to resume. `exec` keeps the final claude as the PTY session leader.
     let claude = resolve_claude();
     let quoted = format!("'{}'", prompt.replace('\'', "'\\''"));
-    let inner = if has_prior_conversation(&cwd) {
-        format!("{claude} --continue {quoted} || exec {claude} {quoted}")
-    } else {
-        format!("exec {claude} {quoted}")
+    let inner = match last_conversation_id(&cwd) {
+        Some(id) => format!("{claude} --resume {id} {quoted} || exec {claude} {quoted}"),
+        None => format!("exec {claude} {quoted}"),
     };
     let mut cmd = CommandBuilder::new("/bin/zsh");
     cmd.arg("-c");
