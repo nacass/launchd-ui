@@ -97,6 +97,27 @@ fn derive_cwd(plist_path: &str) -> String {
     home_str
 }
 
+/// True when claude already has a saved conversation for `cwd`, so it can be
+/// resumed with `--continue` instead of starting fresh. Claude stores per-project
+/// transcripts under ~/.claude/projects/<slug>/ where <slug> is the cwd with every
+/// non-alphanumeric character replaced by '-'.
+fn has_prior_conversation(cwd: &str) -> bool {
+    let Some(home) = dirs::home_dir() else {
+        return false;
+    };
+    let slug: String = cwd
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let dir = home.join(".claude/projects").join(slug);
+    match std::fs::read_dir(&dir) {
+        Ok(entries) => entries
+            .flatten()
+            .any(|e| e.path().extension().is_some_and(|x| x == "jsonl")),
+        Err(_) => false,
+    }
+}
+
 fn start(
     app: AppHandle,
     id: String,
@@ -115,7 +136,12 @@ fn start(
         })
         .map_err(|e| AppError::Launchctl(format!("pty open: {e}")))?;
 
+    // Continue the last conversation for this folder when one exists.
+    let resume = has_prior_conversation(&cwd);
     let mut cmd = CommandBuilder::new(resolve_claude());
+    if resume {
+        cmd.arg("--continue");
+    }
     if !prompt.is_empty() {
         cmd.arg(prompt);
     }
