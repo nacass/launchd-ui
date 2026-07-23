@@ -158,6 +158,10 @@ fn start(
     let path = std::env::var("PATH").unwrap_or_default();
     cmd.env("PATH", format!("/opt/homebrew/bin:/usr/local/bin:{path}"));
     cmd.env("TERM", "xterm-256color");
+    // GUI apps often launch without a UTF-8 locale; set one so accented prompts
+    // ("où en est-on ?") aren't mangled.
+    cmd.env("LANG", "en_US.UTF-8");
+    cmd.env("LC_ALL", "en_US.UTF-8");
 
     let child = pair
         .slave

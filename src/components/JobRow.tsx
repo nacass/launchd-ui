@@ -125,7 +125,7 @@ export function JobRow({
   // "yes, and don't ask again" option exists, else "1").
   const approveKeyRef = useRef("1")
   const sessionId = `claude-terminal:${job.plist_path}:${generation}`
-  const claudePrompt = "où en est-on ?"
+  const claudePrompt = "Réponds en français. Où en est-on ?"
 
   const handleStatus = (
     status: "working" | "waiting" | "idle" | "ended",
