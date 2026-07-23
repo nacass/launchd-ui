@@ -26,8 +26,13 @@ type AgentTerminalProps = {
    * - "working": actively processing (shows "esc to interrupt")
    * - "waiting": awaiting a yes/no answer (shows "esc to cancel" / "proceed?")
    * - "idle": finished responding, sitting at its prompt
+   * `approveKey` is the digit to press to approve when waiting ("2" = "yes, and
+   * don't ask again" when that option exists, else "1" = plain yes); null otherwise.
    */
-  onStatusChange?: (status: "working" | "waiting" | "idle") => void
+  onStatusChange?: (
+    status: "working" | "waiting" | "idle",
+    approveKey: string | null
+  ) => void
 }
 
 // The interactive claude session lives for as long as this component is mounted:
@@ -98,10 +103,10 @@ export function AgentTerminal({
     // cancel" while waiting on a yes/no answer; neither means it is idle.
     type Status = "working" | "waiting" | "idle"
     let lastStatus: Status | null = null
-    const reportStatus = (status: Status) => {
+    const reportStatus = (status: Status, approveKey: string | null) => {
       if (status !== lastStatus) {
         lastStatus = status
-        onStatusRef.current?.(status)
+        onStatusRef.current?.(status, approveKey)
       }
     }
     const evalStatus = () => {
@@ -113,18 +118,20 @@ export function AgentTerminal({
       }
       const t = text.toLowerCase()
       if (t.includes("esc to interrupt")) {
-        reportStatus("working")
+        reportStatus("working", null)
       } else if (
         t.includes("do you want to proceed") ||
         t.includes("esc to cancel") ||
         t.includes("no, exit")
       ) {
-        reportStatus("waiting")
+        // "yes, and don't ask again" is option 2 when present, else plain yes = 1.
+        const approveKey = t.includes("don't ask again") ? "2" : "1"
+        reportStatus("waiting", approveKey)
       } else {
-        reportStatus("idle")
+        reportStatus("idle", null)
       }
     }
-    reportStatus("working") // launching + processing the initial prompt
+    reportStatus("working", null) // launching + processing the initial prompt
     const busyInterval = setInterval(evalStatus, 600)
 
     // Subscribe to output BEFORE starting so nothing is missed.
@@ -137,7 +144,7 @@ export function AgentTerminal({
     listen<ExitPayload>("claude-terminal-exit", (e) => {
       if (e.payload.id === sessionId && !disposed) {
         term.write("\r\n\x1b[2m[claude session ended]\x1b[0m\r\n")
-        reportStatus("idle")
+        reportStatus("idle", null)
       }
     }).then((un) => unlisteners.push(un))
 
@@ -166,7 +173,7 @@ export function AgentTerminal({
     return () => {
       disposed = true
       clearInterval(busyInterval)
-      reportStatus("idle")
+      reportStatus("idle", null)
       ro.disconnect()
       dataSub.dispose()
       unlisteners.forEach((un) => un())

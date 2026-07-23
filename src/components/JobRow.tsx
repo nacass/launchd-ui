@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useState, useRef } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -117,8 +117,19 @@ export function JobRow({
   >("idle")
   const [claudePaused, setClaudePaused] = useState(false)
   const [expanded, setExpanded] = useState(false)
+  // Digit to press to approve claude's current yes/no prompt ("2" when a
+  // "yes, and don't ask again" option exists, else "1").
+  const approveKeyRef = useRef("1")
   const sessionId = `claude-terminal:${job.plist_path}`
   const claudePrompt = "où en est-on ?"
+
+  const handleStatus = (
+    status: "working" | "waiting" | "idle",
+    approveKey: string | null
+  ) => {
+    setClaudeStatus(status)
+    if (approveKey) approveKeyRef.current = approveKey
+  }
 
   // Idle = a session exists, claude finished responding, and it is not paused.
   const claudeIdle =
@@ -138,9 +149,13 @@ export function JobRow({
     }
     setExpanded(true)
   }
-  // Pause / resume the whole claude process group.
+  // Blue pause button. When claude is waiting on a yes/no, it approves (sends
+  // "yes", or "yes, and don't ask again" when that option exists). Otherwise it
+  // pauses / resumes the whole claude process group.
   const onPause = () => {
-    if (claudePaused) {
+    if (claudeStatus === "waiting") {
+      claudeTerminalWrite(sessionId, approveKeyRef.current)
+    } else if (claudePaused) {
       claudeTerminalResume(sessionId)
       setClaudePaused(false)
     } else {
@@ -263,10 +278,10 @@ export function JobRow({
                 onClick={onPause}
                 disabled={!claudeStarted}
                 title={
-                  claudePaused
-                    ? "Reprendre Claude"
-                    : claudeStatus === "waiting"
-                      ? "Claude attend ta réponse"
+                  claudeStatus === "waiting"
+                    ? "Approuver (Yes / Yes for all)"
+                    : claudePaused
+                      ? "Reprendre Claude"
                       : "Mettre Claude en pause"
                 }
               >
@@ -347,7 +362,7 @@ export function JobRow({
             plistPath={job.plist_path}
             prompt={claudePrompt}
             visible={expanded}
-            onStatusChange={setClaudeStatus}
+            onStatusChange={handleStatus}
           />
         </TableCell>
       </TableRow>
