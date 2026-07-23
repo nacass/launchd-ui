@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react"
+import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react"
 import { Terminal } from "@xterm/xterm"
 import { FitAddon } from "@xterm/addon-fit"
 import { listen } from "@tauri-apps/api/event"
@@ -50,6 +50,25 @@ export function AgentTerminal({
   const fitRef = useRef<FitAddon | null>(null)
   const onStatusRef = useRef(onStatusChange)
   onStatusRef.current = onStatusChange
+  // Draggable panel height (px). The ResizeObserver below re-fits the PTY.
+  const [height, setHeight] = useState(288)
+
+  const startResize = (e: ReactMouseEvent) => {
+    e.preventDefault()
+    const startY = e.clientY
+    const startHeight = height
+    const onMove = (ev: globalThis.MouseEvent) => {
+      setHeight(Math.min(900, Math.max(140, startHeight + ev.clientY - startY)))
+    }
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove)
+      window.removeEventListener("mouseup", onUp)
+      document.body.style.userSelect = ""
+    }
+    window.addEventListener("mousemove", onMove)
+    window.addEventListener("mouseup", onUp)
+    document.body.style.userSelect = "none"
+  }
 
   useEffect(() => {
     const container = containerRef.current
@@ -212,5 +231,20 @@ export function AgentTerminal({
     return () => clearTimeout(t)
   }, [visible, sessionId])
 
-  return <div ref={containerRef} className="h-72 w-full overflow-hidden" />
+  return (
+    <div className="w-full">
+      <div
+        ref={containerRef}
+        style={{ height: `${height}px` }}
+        className="w-full overflow-hidden"
+      />
+      <div
+        onMouseDown={startResize}
+        title="Glisser pour redimensionner la fenêtre Claude"
+        className="group flex h-2.5 w-full cursor-ns-resize items-center justify-center border-t bg-muted/40 hover:bg-muted"
+      >
+        <div className="h-0.5 w-8 rounded-full bg-muted-foreground/40 group-hover:bg-muted-foreground/70" />
+      </div>
+    </div>
+  )
 }
