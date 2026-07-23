@@ -30,7 +30,7 @@ type AgentTerminalProps = {
    * don't ask again" when that option exists, else "1" = plain yes); null otherwise.
    */
   onStatusChange?: (
-    status: "working" | "waiting" | "idle",
+    status: "working" | "waiting" | "idle" | "ended",
     approveKey: string | null
   ) => void
 }
@@ -101,7 +101,7 @@ export function AgentTerminal({
     // Track claude's activity by reading the visible terminal: it shows
     // "esc to interrupt" while working and "Do you want to proceed / esc to
     // cancel" while waiting on a yes/no answer; neither means it is idle.
-    type Status = "working" | "waiting" | "idle"
+    type Status = "working" | "waiting" | "idle" | "ended"
     let lastStatus: Status | null = null
     const reportStatus = (status: Status, approveKey: string | null) => {
       // Fire on any status change, and keep firing while waiting so the approve
@@ -148,8 +148,11 @@ export function AgentTerminal({
 
     listen<ExitPayload>("claude-terminal-exit", (e) => {
       if (e.payload.id === sessionId && !disposed) {
+        // Process died (stopped or /quit): keep the panel showing the transcript,
+        // stop polling, and mark the session as ended.
+        clearInterval(busyInterval)
         term.write("\r\n\x1b[2m[claude session ended]\x1b[0m\r\n")
-        reportStatus("idle", null)
+        reportStatus("ended", null)
       }
     }).then((un) => unlisteners.push(un))
 

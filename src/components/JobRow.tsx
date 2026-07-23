@@ -14,6 +14,7 @@ import {
   claudeTerminalWrite,
   claudeTerminalPause,
   claudeTerminalResume,
+  claudeTerminalStop,
 } from "@/lib/invoke"
 import type { JobListEntry } from "@/types"
 import {
@@ -110,39 +111,47 @@ export function JobRow({
   const isUserAgent = job.source === "UserAgent"
   const isHome = job.is_home_agent
 
-  // Interactive claude session for this agent.
+  // Interactive claude session for this agent. `claudeStarted` keeps the panel
+  // mounted (so the transcript stays visible even after the process is stopped);
+  // `generation` bumps to force a fresh session on relaunch.
   const [claudeStarted, setClaudeStarted] = useState(false)
   const [claudeStatus, setClaudeStatus] = useState<
-    "working" | "waiting" | "idle"
+    "working" | "waiting" | "idle" | "ended"
   >("idle")
   const [claudePaused, setClaudePaused] = useState(false)
   const [expanded, setExpanded] = useState(false)
+  const [generation, setGeneration] = useState(0)
   // Digit to press to approve claude's current yes/no prompt ("2" when a
   // "yes, and don't ask again" option exists, else "1").
   const approveKeyRef = useRef("1")
-  const sessionId = `claude-terminal:${job.plist_path}`
+  const sessionId = `claude-terminal:${job.plist_path}:${generation}`
   const claudePrompt = "où en est-on ?"
 
   const handleStatus = (
-    status: "working" | "waiting" | "idle",
+    status: "working" | "waiting" | "idle" | "ended",
     approveKey: string | null
   ) => {
     setClaudeStatus(status)
     if (approveKey) approveKeyRef.current = approveKey
   }
 
-  // Idle = a session exists, claude finished responding, and it is not paused.
-  const claudeIdle =
-    claudeStarted && claudeStatus === "idle" && !claudePaused
+  // Alive = the panel is open AND claude's process is still running.
+  const alive = claudeStarted && claudeStatus !== "ended"
+  const claudeIdle = alive && claudeStatus === "idle" && !claudePaused
   // Pause is "lit" while manually paused OR while claude awaits a yes/no answer.
-  const pauseLit =
-    claudeStarted && (claudePaused || claudeStatus === "waiting")
+  const pauseLit = alive && (claudePaused || claudeStatus === "waiting")
   const greyIcon = "fill-muted-foreground/20 text-muted-foreground/40"
 
-  // Super-lightning: launch claude, or (when idle) re-ask in the same session.
+  // Super-lightning: launch claude, relaunch a fresh session after it ended, or
+  // (when idle) re-ask in the same session.
   const onSuperLightning = () => {
     if (!claudeStarted) {
       setClaudeStarted(true)
+      setClaudeStatus("working")
+    } else if (claudeStatus === "ended") {
+      setGeneration((g) => g + 1) // remount → fresh session
+      setClaudePaused(false)
+      setClaudeStatus("working")
     } else {
       claudeTerminalWrite(sessionId, `${claudePrompt}\r`)
       setClaudeStatus("working")
@@ -163,12 +172,11 @@ export function JobRow({
       setClaudePaused(true)
     }
   }
-  // Super-stop: fully stop claude. The session is killed on unmount; works even
-  // while the panel is collapsed (claude keeps running until stopped).
+  // Super-stop: kill claude but keep the panel open showing the ended transcript
+  // (status flips to "ended" via the exit event). Works even when collapsed.
   const onSuperStop = () => {
-    setClaudeStarted(false)
+    claudeTerminalStop(sessionId)
     setClaudePaused(false)
-    setExpanded(false)
   }
 
   return (
@@ -258,17 +266,19 @@ export function JobRow({
                 size="icon"
                 className="h-8 w-8"
                 onClick={onSuperLightning}
-                disabled={claudeStarted && !claudeIdle}
+                disabled={alive && !claudeIdle}
                 title={
                   !claudeStarted
                     ? "Lancer un chat Claude (« où en est-on ? »)"
-                    : claudeIdle
-                      ? "Redemander « où en est-on ? »"
-                      : "Claude travaille…"
+                    : claudeStatus === "ended"
+                      ? "Relancer une session Claude"
+                      : claudeIdle
+                        ? "Redemander « où en est-on ? »"
+                        : "Claude travaille…"
                 }
               >
                 <Zap
-                  className={`h-4 w-4 ${claudeStarted && !claudeIdle ? greyIcon : "fill-amber-400 text-amber-500"}`}
+                  className={`h-4 w-4 ${alive && !claudeIdle ? greyIcon : "fill-amber-400 text-amber-500"}`}
                 />
               </Button>
               <Button
@@ -276,7 +286,7 @@ export function JobRow({
                 size="icon"
                 className="h-8 w-8"
                 onClick={onPause}
-                disabled={!claudeStarted}
+                disabled={!alive}
                 title={
                   claudeStatus === "waiting"
                     ? "Approuver (Yes / Yes for all)"
@@ -294,11 +304,11 @@ export function JobRow({
                 size="icon"
                 className="h-8 w-8"
                 onClick={onSuperStop}
-                disabled={!claudeStarted}
+                disabled={!alive}
                 title="Arrêter Claude"
               >
                 <Square
-                  className={`h-4 w-4 ${claudeStarted ? "fill-red-500 text-red-500" : greyIcon}`}
+                  className={`h-4 w-4 ${alive ? "fill-red-500 text-red-500" : greyIcon}`}
                 />
               </Button>
             </>
@@ -358,6 +368,7 @@ export function JobRow({
       <TableRow className={expanded ? "" : "hidden"}>
         <TableCell colSpan={6} className="p-0">
           <AgentTerminal
+            key={generation}
             sessionId={sessionId}
             plistPath={job.plist_path}
             prompt={claudePrompt}
