@@ -136,15 +136,19 @@ fn start(
         })
         .map_err(|e| AppError::Launchctl(format!("pty open: {e}")))?;
 
-    // Continue the last conversation for this folder when one exists.
-    let resume = has_prior_conversation(&cwd);
-    let mut cmd = CommandBuilder::new(resolve_claude());
-    if resume {
-        cmd.arg("--continue");
-    }
-    if !prompt.is_empty() {
-        cmd.arg(prompt);
-    }
+    // Try to resume this folder's last conversation, but fall back to a fresh
+    // session (via `||`) so claude never just exits when `--continue` finds
+    // nothing to resume. `exec` keeps the final claude as the PTY session leader.
+    let claude = resolve_claude();
+    let quoted = format!("'{}'", prompt.replace('\'', "'\\''"));
+    let inner = if has_prior_conversation(&cwd) {
+        format!("{claude} --continue {quoted} || exec {claude} {quoted}")
+    } else {
+        format!("exec {claude} {quoted}")
+    };
+    let mut cmd = CommandBuilder::new("/bin/zsh");
+    cmd.arg("-c");
+    cmd.arg(inner);
     cmd.cwd(cwd);
     // Inherit the parent environment, then ensure claude is findable and the
     // terminal type is set for its TUI.
@@ -255,6 +259,9 @@ pub fn claude_terminal_resize(id: String, cols: u16, rows: u16) -> Result<(), Ap
 
 #[tauri::command]
 pub fn claude_terminal_stop(id: String) -> Result<(), AppError> {
+    // Kill the whole group (the launcher shell and claude) so nothing is left
+    // orphaned, then drop the session.
+    signal_group(&id, "-KILL");
     if let Some(mut s) = SESSIONS.lock().unwrap().remove(&id) {
         let _ = s.child.kill();
     }
