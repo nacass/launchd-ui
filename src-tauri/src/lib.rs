@@ -30,6 +30,8 @@ pub fn run() {
             pty::claude_terminal_write,
             pty::claude_terminal_resize,
             pty::claude_terminal_stop,
+            pty::claude_terminal_pause,
+            pty::claude_terminal_resume,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

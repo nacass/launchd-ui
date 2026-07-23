@@ -10,7 +10,11 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { TableCell, TableRow } from "@/components/ui/table"
 import { AgentTerminal } from "@/components/AgentTerminal"
-import { claudeTerminalWrite } from "@/lib/invoke"
+import {
+  claudeTerminalWrite,
+  claudeTerminalPause,
+  claudeTerminalResume,
+} from "@/lib/invoke"
 import type { JobListEntry } from "@/types"
 import {
   Play,
@@ -21,6 +25,7 @@ import {
   FileText,
   FolderOpen,
   Zap,
+  Pause,
   ChevronDown,
   ChevronRight,
 } from "lucide-react"
@@ -107,31 +112,49 @@ export function JobRow({
 
   // Interactive claude session for this agent.
   const [claudeStarted, setClaudeStarted] = useState(false)
-  // "Busy" = claude is working or waiting on a yes/no; false once it is idle.
-  const [claudeBusy, setClaudeBusy] = useState(false)
+  const [claudeStatus, setClaudeStatus] = useState<
+    "working" | "waiting" | "idle"
+  >("idle")
+  const [claudePaused, setClaudePaused] = useState(false)
   const [expanded, setExpanded] = useState(false)
   const sessionId = `claude-terminal:${job.plist_path}`
   const claudePrompt = "où en est-on ?"
 
-  // Super-lightning: launch claude, or (when idle) ask again in the same
-  // session. Disabled while claude is busy.
+  // Idle = a session exists, claude finished responding, and it is not paused.
+  const claudeIdle =
+    claudeStarted && claudeStatus === "idle" && !claudePaused
+  // Pause is "lit" while manually paused OR while claude awaits a yes/no answer.
+  const pauseLit =
+    claudeStarted && (claudePaused || claudeStatus === "waiting")
+  const greyIcon = "fill-muted-foreground/20 text-muted-foreground/40"
+
+  // Super-lightning: launch claude, or (when idle) re-ask in the same session.
   const onSuperLightning = () => {
     if (!claudeStarted) {
       setClaudeStarted(true)
     } else {
       claudeTerminalWrite(sessionId, `${claudePrompt}\r`)
-      setClaudeBusy(true)
+      setClaudeStatus("working")
     }
     setExpanded(true)
   }
-  // Super-stop: interrupt claude's current turn (Esc). The session and its
-  // conversation stay, so the chevron keeps showing the transcript.
-  const onSuperStop = () => {
-    claudeTerminalWrite(sessionId, "\x1b")
+  // Pause / resume the whole claude process group.
+  const onPause = () => {
+    if (claudePaused) {
+      claudeTerminalResume(sessionId)
+      setClaudePaused(false)
+    } else {
+      claudeTerminalPause(sessionId)
+      setClaudePaused(true)
+    }
   }
-  // Active = a session exists AND claude is busy (working or awaiting yes/no).
-  const claudeActive = claudeStarted && claudeBusy
-  const greyIcon = "fill-muted-foreground/20 text-muted-foreground/40"
+  // Super-stop: fully stop claude. The session is killed on unmount; works even
+  // while the panel is collapsed (claude keeps running until stopped).
+  const onSuperStop = () => {
+    setClaudeStarted(false)
+    setClaudePaused(false)
+    setExpanded(false)
+  }
 
   return (
     <>
@@ -220,17 +243,35 @@ export function JobRow({
                 size="icon"
                 className="h-8 w-8"
                 onClick={onSuperLightning}
-                disabled={claudeActive}
+                disabled={claudeStarted && !claudeIdle}
                 title={
                   !claudeStarted
                     ? "Lancer un chat Claude (« où en est-on ? »)"
-                    : claudeBusy
-                      ? "Claude travaille…"
-                      : "Redemander « où en est-on ? »"
+                    : claudeIdle
+                      ? "Redemander « où en est-on ? »"
+                      : "Claude travaille…"
                 }
               >
                 <Zap
-                  className={`h-4 w-4 ${claudeActive ? greyIcon : "fill-amber-400 text-amber-500"}`}
+                  className={`h-4 w-4 ${claudeStarted && !claudeIdle ? greyIcon : "fill-amber-400 text-amber-500"}`}
+                />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8"
+                onClick={onPause}
+                disabled={!claudeStarted}
+                title={
+                  claudePaused
+                    ? "Reprendre Claude"
+                    : claudeStatus === "waiting"
+                      ? "Claude attend ta réponse"
+                      : "Mettre Claude en pause"
+                }
+              >
+                <Pause
+                  className={`h-4 w-4 ${pauseLit ? "fill-sky-500 text-sky-500" : greyIcon}`}
                 />
               </Button>
               <Button
@@ -238,11 +279,11 @@ export function JobRow({
                 size="icon"
                 className="h-8 w-8"
                 onClick={onSuperStop}
-                disabled={!claudeActive}
-                title="Interrompre Claude (Échap)"
+                disabled={!claudeStarted}
+                title="Arrêter Claude"
               >
                 <Square
-                  className={`h-4 w-4 ${claudeActive ? "fill-red-500 text-red-500" : greyIcon}`}
+                  className={`h-4 w-4 ${claudeStarted ? "fill-red-500 text-red-500" : greyIcon}`}
                 />
               </Button>
             </>
@@ -306,7 +347,7 @@ export function JobRow({
             plistPath={job.plist_path}
             prompt={claudePrompt}
             visible={expanded}
-            onBusyChange={setClaudeBusy}
+            onStatusChange={setClaudeStatus}
           />
         </TableCell>
       </TableRow>

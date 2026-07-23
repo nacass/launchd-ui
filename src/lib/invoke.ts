@@ -70,3 +70,9 @@ export const claudeTerminalResize = (id: string, cols: number, rows: number) =>
 
 export const claudeTerminalStop = (id: string) =>
   invoke<void>("claude_terminal_stop", { id })
+
+export const claudeTerminalPause = (id: string) =>
+  invoke<void>("claude_terminal_pause", { id })
+
+export const claudeTerminalResume = (id: string) =>
+  invoke<void>("claude_terminal_resume", { id })

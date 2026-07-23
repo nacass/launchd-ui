@@ -16,6 +16,7 @@ struct Session {
     master: Box<dyn MasterPty + Send>,
     writer: Box<dyn Write + Send>,
     child: Box<dyn portable_pty::Child + Send + Sync>,
+    pid: Option<u32>,
 }
 
 static SESSIONS: LazyLock<Mutex<HashMap<String, Session>>> =
@@ -132,6 +133,7 @@ fn start(
         .slave
         .spawn_command(cmd)
         .map_err(|e| AppError::Launchctl(format!("spawn claude: {e}")))?;
+    let pid = child.process_id();
     drop(pair.slave);
 
     let mut reader = pair
@@ -149,6 +151,7 @@ fn start(
             master: pair.master,
             writer,
             child,
+            pid,
         },
     );
 
@@ -229,5 +232,31 @@ pub fn claude_terminal_stop(id: String) -> Result<(), AppError> {
     if let Some(mut s) = SESSIONS.lock().unwrap().remove(&id) {
         let _ = s.child.kill();
     }
+    Ok(())
+}
+
+/// Send a signal to the session's whole process group (claude + its children,
+/// which share the PTY session leader's group). Used to pause/resume.
+fn signal_group(id: &str, signal: &str) {
+    let map = SESSIONS.lock().unwrap();
+    if let Some(s) = map.get(id) {
+        if let Some(pid) = s.pid {
+            let _ = std::process::Command::new("/bin/kill")
+                .arg(signal)
+                .arg(format!("-{pid}"))
+                .status();
+        }
+    }
+}
+
+#[tauri::command]
+pub fn claude_terminal_pause(id: String) -> Result<(), AppError> {
+    signal_group(&id, "-STOP");
+    Ok(())
+}
+
+#[tauri::command]
+pub fn claude_terminal_resume(id: String) -> Result<(), AppError> {
+    signal_group(&id, "-CONT");
     Ok(())
 }
