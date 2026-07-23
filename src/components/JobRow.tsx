@@ -14,7 +14,6 @@ import {
   claudeTerminalWrite,
   claudeTerminalPause,
   claudeTerminalResume,
-  claudeTerminalStop,
 } from "@/lib/invoke"
 import type { JobListEntry } from "@/types"
 import {
@@ -172,11 +171,10 @@ export function JobRow({
       setClaudePaused(true)
     }
   }
-  // Super-stop: kill claude but keep the panel open showing the ended transcript
-  // (status flips to "ended" via the exit event). Works even when collapsed.
+  // Super-stop: interrupt claude's current turn (Esc). The session stays alive so
+  // the conversation remains scrollable and claude returns to its prompt.
   const onSuperStop = () => {
-    claudeTerminalStop(sessionId)
-    setClaudePaused(false)
+    claudeTerminalWrite(sessionId, "\x1b")
   }
 
   return (
@@ -305,7 +303,7 @@ export function JobRow({
                 className="h-8 w-8"
                 onClick={onSuperStop}
                 disabled={!alive}
-                title="Arrêter Claude"
+                title="Interrompre la réflexion de Claude (Échap)"
               >
                 <Square
                   className={`h-4 w-4 ${alive ? "fill-red-500 text-red-500" : greyIcon}`}
